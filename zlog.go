@@ -14,23 +14,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package glog implements logging analogous to the Google-internal C++ INFO/ERROR/V setup.
+// Package zlog implements logging analogous to the Google-internal C++ INFO/ERROR/V setup.
 // It provides functions Info, Warning, Error, Fatal, plus formatting variants such as
 // Infof. It also provides V-style logging controlled by the -v and -vmodule=file=2 flags.
 //
 // Basic examples:
 //
-//	glog.Info("Prepare to repel boarders")
+//	zlog.Info("Prepare to repel boarders")
 //
-//	glog.Fatalf("Initialization failed: %s", err)
+//	zlog.Fatalf("Initialization failed: %s", err)
 //
 // See the documentation for the V function for an explanation of these examples:
 //
-//	if glog.V(2) {
-//		glog.Info("Starting transaction...")
+//	if zlog.V(2) {
+//		zlog.Info("Starting transaction...")
 //	}
 //
-//	glog.V(2).Infoln("Processed", nItems, "elements")
+//	zlog.V(2).Infoln("Processed", nItems, "elements")
 //
 // Log output is buffered and written periodically using Flush. Programs
 // should call Flush before exiting to guarantee all log output is written.
@@ -39,7 +39,7 @@
 // This package provides several flags that modify this behavior.
 // As a result, flag.Parse must be called before any logging is done.
 //
-//	-logtostderr=false
+//	-logtostderr=true
 //		Logs are written to standard error instead of to files.
 //	-alsologtostderr=false
 //		Logs are written to standard error as well as to files.
@@ -68,7 +68,7 @@
 //			-vmodule=gopher*=3
 //		sets the V level to 3 in all Go files whose names begin "gopher".
 //
-package glog
+package zlog
 
 import (
 	"bufio"
@@ -396,7 +396,7 @@ type flushSyncWriter interface {
 }
 
 func init() {
-	flag.BoolVar(&logging.toStderr, "logtostderr", false, "log to standard error instead of files")
+	flag.BoolVar(&logging.toStderr, "logtostderr", true, "log to standard error instead of files")
 	flag.BoolVar(&logging.alsoToStderr, "alsologtostderr", false, "log to standard error as well as files")
 	flag.Var(&logging.verbosity, "v", "log level for V logs")
 	flag.Var(&logging.stderrThreshold, "stderrthreshold", "logs at or above this threshold go to stderr")
@@ -521,13 +521,12 @@ It returns a buffer containing the formatted header and the user's file and line
 The depth specifies how many stack frames above lives the source line to be identified in the log message.
 
 Log lines have this form:
-	Lmmdd hh:mm:ss.uuuuuu threadid file:line] msg...
+	Lmmdd hh:mm:ss.uuuuuu file:line] msg...
 where the fields are defined as follows:
 	L                A single character, representing the log level (eg 'I' for INFO)
 	mm               The month (zero padded; ie May is '05')
 	dd               The day (zero padded)
 	hh:mm:ss.uuuuuu  Time in hours, minutes and fractional seconds
-	threadid         The space-padded thread ID as returned by GetTID()
 	file             The file name
 	line             The line number
 	msg              The user-supplied message
@@ -561,7 +560,7 @@ func (l *loggingT) formatHeader(s severity, file string, line int) *buffer {
 	// It's worth about 3X. Fprintf is hard.
 	_, month, day := now.Date()
 	hour, minute, second := now.Clock()
-	// Lmmdd hh:mm:ss.uuuuuu threadid file:line]
+	// Lmmdd hh:mm:ss.uuuuuu file:line]
 	buf.tmp[0] = severityChar[s]
 	buf.twoDigits(1, int(month))
 	buf.twoDigits(3, day)
@@ -574,9 +573,7 @@ func (l *loggingT) formatHeader(s severity, file string, line int) *buffer {
 	buf.tmp[14] = '.'
 	buf.nDigits(6, 15, now.Nanosecond()/1000, '0')
 	buf.tmp[21] = ' '
-	buf.nDigits(7, 22, pid, ' ') // TODO: should be TID
-	buf.tmp[29] = ' '
-	buf.Write(buf.tmp[:30])
+	buf.Write(buf.tmp[:22])
 	buf.WriteString(file)
 	buf.tmp[0] = ':'
 	n := buf.someDigits(1, line)
@@ -741,7 +738,7 @@ func (l *loggingT) output(s severity, buf *buffer, file string, line int, alsoTo
 
 // timeoutFlush calls Flush and returns when it completes or after timeout
 // elapses, whichever happens first.  This is needed because the hooks invoked
-// by Flush may deadlock when glog.Fatal is called from a hook that holds
+// by Flush may deadlock when zlog.Fatal is called from a hook that holds
 // a lock.
 func timeoutFlush(timeout time.Duration) {
 	done := make(chan bool, 1)
@@ -752,7 +749,7 @@ func timeoutFlush(timeout time.Duration) {
 	select {
 	case <-done:
 	case <-time.After(timeout):
-		fmt.Fprintln(os.Stderr, "glog: Flush took longer than", timeout)
+		fmt.Fprintln(os.Stderr, "zlog: Flush took longer than", timeout)
 	}
 }
 
@@ -845,7 +842,7 @@ func (sb *syncBuffer) rotateFile(now time.Time) error {
 	fmt.Fprintf(&buf, "Log file created at: %s\n", now.Format("2006/01/02 15:04:05"))
 	fmt.Fprintf(&buf, "Running on machine: %s\n", host)
 	fmt.Fprintf(&buf, "Binary: Built with %s %s for %s/%s\n", runtime.Compiler, runtime.Version(), runtime.GOOS, runtime.GOARCH)
-	fmt.Fprintf(&buf, "Log line format: [IWEF]mmdd hh:mm:ss.uuuuuu threadid file:line] msg\n")
+	fmt.Fprintf(&buf, "Log line format: [IWEF]mmdd hh:mm:ss.uuuuuu file:line] msg\n")
 	n, err := sb.file.Write(buf.Bytes())
 	sb.nbytes += uint64(n)
 	return err
@@ -986,9 +983,9 @@ type Verbose bool
 // The returned value is a boolean of type Verbose, which implements Info, Infoln
 // and Infof. These methods will write to the Info log if called.
 // Thus, one may write either
-//	if glog.V(2) { glog.Info("log this") }
+//	if zlog.V(2) { zlog.Info("log this") }
 // or
-//	glog.V(2).Info("log this")
+//	zlog.V(2).Info("log this")
 // The second form is shorter but the first is cheaper if logging is off because it does
 // not evaluate its arguments.
 //
